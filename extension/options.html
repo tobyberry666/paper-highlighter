@@ -1,0 +1,10 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><link rel="stylesheet" href="ui.css"><title>论文重点 · 接口设置</title></head>
+<body class="options"><main><h1>论文重点 · 接口设置</h1><p>填写 DeepSeek 官方或支持 Chat Completions 的兼容接口。</p>
+<form id="form"><label>接口基地址<input id="baseUrl" type="url" required placeholder="https://api.deepseek.com"></label>
+<label>模型名<input id="model" required placeholder="填写服务商提供的模型名"></label>
+<label>API Key<input id="apiKey" type="password" autocomplete="off" required></label>
+<p class="hint">密钥只保存在这个浏览器的扩展本地存储中，不交给论文网页。分析时，论文文字会发送到你配置的模型服务。</p>
+<div class="row"><button class="primary" type="submit">保存设置</button><button id="test" type="button">测试连接</button></div></form>
+<p id="status" role="status"></p><p class="hint">官方接口默认模型名来自 DeepSeek 文档示例。第三方服务请使用它自己的地址和模型名。接口需支持 JSON 输出。</p>
+<p><a href="https://api-docs.deepseek.com/guides/json_mode/" target="_blank" rel="noreferrer">DeepSeek 官方接口说明</a></p>
+<script src="core.js"></script><script src="options.js"></script></main></body></html>

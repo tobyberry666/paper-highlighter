@@ -1,0 +1,6 @@
+::highlight(paper-core) { background-color: #ffdf798f; }
+::highlight(paper-boundary) { background-color: #d8c2ff9c; }
+@media (prefers-color-scheme: dark) {
+  ::highlight(paper-core) { background-color: #b28a2a80; }
+  ::highlight(paper-boundary) { background-color: #8c66c280; }
+}

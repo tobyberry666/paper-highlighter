@@ -1,0 +1,18 @@
+{
+  "manifest_version": 3,
+  "name": "论文重点 · Paper Highlights",
+  "version": "0.1.0",
+  "description": "使用 DeepSeek 或兼容接口识别 arXiv 论文的问题、机制、证据和限制，在原网页高亮并显示中文理由。",
+  "minimum_chrome_version": "110",
+  "permissions": ["storage", "activeTab"],
+  "optional_host_permissions": ["https://*/*", "http://localhost/*", "http://127.0.0.1/*", "http://[::1]/*"],
+  "background": { "service_worker": "background.js" },
+  "action": { "default_popup": "popup.html" },
+  "options_page": "options.html",
+  "content_scripts": [{
+    "matches": ["https://arxiv.org/html/*"],
+    "js": ["core.js", "content.js"],
+    "css": ["highlight.css"],
+    "run_at": "document_idle"
+  }]
+}

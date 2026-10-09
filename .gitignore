@@ -1,0 +1,9 @@
+node_modules/
+*.zip
+.env
+.env.*
+!.env.example
+*.log
+playwright-report/
+test-results/
+docs/superpowers/
