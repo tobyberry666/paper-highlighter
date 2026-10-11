@@ -1,5 +1,5 @@
 (() => {
-  const translations = 'immersive-translate-target-wrapper, immersive-translate-target-inner, .immersive-translate-target-wrapper, .immersive-translate-target-inner, .immersive-translate-target-translation, [data-immersive-translate-translation-element]';
+  const translations = 'immersive-translate-target-wrapper, immersive-translate-target-inner, .immersive-translate-target-wrapper, .immersive-translate-target-inner, .immersive-translate-target-translation, [data-immersive-translate-translation-element], [data-immersive-translate-translation-element-mark]';
   const excluded = 'script, style, annotation, pre, code, .ltx_bibliography, .ltx_listing, .ltx_verbatim, .ltx_ERROR';
   const state = { running: false, visible: true, status: '准备就绪', completed: 0, total: 0, records: [], generation: 0 };
   let painted = [], refreshTimer;
@@ -32,7 +32,7 @@
     const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT, {
       acceptNode(node) {
         const parent = node.parentElement;
-        if (!parent || parent.closest(excluded) || (!translation && parent.closest(translations))) return NodeFilter.FILTER_REJECT;
+        if (!parent || parent.closest(excluded) || (!translation && (parent.closest(translations) || parent.closest('[data-imt="1"]')))) return NodeFilter.FILTER_REJECT;
         if (parent.closest('[hidden], [aria-hidden=true]')) return NodeFilter.FILTER_REJECT;
         return NodeFilter.FILTER_ACCEPT;
       }
@@ -50,7 +50,7 @@
   }
 
   function readPaper() {
-    const blocks = [], seen = new Set();
+    const blocks = [], targets = [], seen = new Set();
     const article = document.querySelector('article.ltx_document, .ltx_document, article');
     if (!article) throw new Error('未找到 arXiv 论文正文，请在 HTML 论文页面使用。');
     for (const element of article.querySelectorAll('p.ltx_p, .ltx_caption')) {
@@ -61,10 +61,17 @@
       const section = sectionElement?.querySelector('.ltx_title')?.textContent.trim() || (sectionElement?.matches('.ltx_abstract') ? 'Abstract' : '正文');
       const data = collectText(element);
       if (data.text.trim()) blocks.push({ element, section, language: 'en', ...data });
-      for (const target of element.querySelectorAll(translations)) {
-        if (target.parentElement?.closest(translations)) continue;
+      const source = blocks.at(-1);
+      if (!source || source.element !== element) continue;
+      const candidates = [...element.querySelectorAll(translations)];
+      // Block translations can be inserted immediately after the original paragraph.
+      let sibling = element.nextElementSibling;
+      while (sibling?.matches('br[data-imt="1"]')) sibling = sibling.nextElementSibling;
+      if (sibling?.matches(translations)) candidates.push(sibling);
+      for (const target of candidates) {
+        if (target.parentElement?.closest(translations) || targets.some(t => t.element === target)) continue;
         const translated = collectText(target, true);
-        if (/[\u3400-\u9fff]/.test(translated.text)) blocks.push({ element: target, section, language: 'zh', ...translated });
+        if (/[\u3400-\u9fff]/.test(translated.text)) targets.push({ id: `t${targets.length}`, element: target, source, section, language: 'zh', ...translated });
       }
     }
     const outline = [...article.querySelectorAll('.ltx_title_section, .ltx_title_subsection, section > h2, section > h3')].map(e => e.textContent.trim()).slice(0, 60);
@@ -73,7 +80,8 @@
     const sentences = blocks.flatMap(block => PaperCore.splitSentences(block.text, block.language).map(sentence => ({ ...sentence, section: block.section, language: block.language, block,
       formulas: block.formulas.filter(f => f.start < sentence.end && f.end > sentence.start).map(f => f.notation) })));
     sentences.forEach((sentence, i) => { sentence.id = `s${i}`; });
-    return { context, sentences, blocks };
+    for (const target of targets) target.sourceIds = sentences.filter(s => s.block === target.source).map(s => s.id);
+    return { context, sentences, targets };
   }
 
   function textRange(block, start, end) {
@@ -114,24 +122,40 @@
     shadow.querySelector('[data-detail]').hidden = true;
     paint();
     try {
-      const { context, sentences } = readPaper();
+      const { context, sentences, targets } = readPaper();
       if (!sentences.length) throw new Error('未找到可分析的正文句子。');
-      const batches = PaperCore.batchSentences(sentences);
+      const batches = PaperCore.batchSentences(sentences, sentence => sentence.text.length + targets.filter(t => t.sourceIds.includes(sentence.id)).reduce((size, t) => size + 2 * t.text.length, 0));
+      let unmatched = 0;
       state.total = sentences.length;
       for (const batch of batches) {
         if (generation !== state.generation) return;
         state.status = `正在分析 ${state.completed} / ${state.total} 句…`; update();
         const first = sentences.indexOf(batch[0]), last = sentences.indexOf(batch.at(-1));
         const neighbors = [...sentences.slice(Math.max(0, first - 2), first), ...sentences.slice(last + 1, last + 3)].map(s => s.text.slice(0, 1000));
-        const response = await chrome.runtime.sendMessage({ type: 'classify', context, neighbors, sentences: batch.map(({ id, text, section, language, formulas }) => ({ id, text, section, language, formulas })) });
+        const batchIds = new Set(batch.map(s => s.id));
+        const batchTargets = targets.filter(t => t.sourceIds.some(id => batchIds.has(id))).map(({id,text,sourceIds}) => ({id,text,sourceIds:sourceIds.filter(id=>batchIds.has(id))}));
+        const response = await chrome.runtime.sendMessage({ type: 'classify', context, neighbors, translations: batchTargets, sentences: batch.map(({ id, text, section, language, formulas }) => ({ id, text, section, language, formulas })) });
         if (generation !== state.generation) return;
         if (!response?.ok) throw new Error(response?.error || '扩展后台没有响应，请刷新页面后重试。');
+        if (response.annotations.some(row => (row.matches || []).some(match => state.records.some(record =>
+          record.language === 'zh' && record.block.id === match.id && record.start < match.end && record.end > match.start)))) {
+          throw new Error('译文对应片段与已完成批次重叠，本批次未应用，请重新分析。');
+        }
         const byId = new Map(batch.map(s => [s.id, s]));
-        for (const row of response.annotations) state.records.push({ ...byId.get(row.id), ...row });
+        for (const row of response.annotations) {
+          const source = byId.get(row.id);
+          state.records.push({ ...source, ...row });
+          if (row.priority !== 'core') continue;
+          if (batchTargets.some(t => t.sourceIds.includes(row.id)) && !row.matches?.length) unmatched++;
+          for (const match of row.matches || []) {
+            const target = targets.find(t => t.id === match.id);
+            state.records.push({ ...row, text: match.quote, start: match.start, end: match.end, block: target, language: 'zh' });
+          }
+        }
         state.completed += batch.length; paint();
       }
       const selected = state.records.filter(r => r.priority === 'core').length;
-      state.status = `完成：分析 ${state.total} 句，显示 ${painted.length} 句重点。${painted.length < selected ? ` 另有 ${selected - painted.length} 句因页面变化未定位，请重新分析。` : ''}`;
+      state.status = `完成：分析 ${state.total} 句，显示 ${painted.length} 句重点。${unmatched ? ` ${unmatched} 句重点未可靠对应到译文。` : ''}${!targets.length ? ' 未检测到中文译文，请先使用沉浸式翻译。' : ''}${painted.length < selected ? ` 另有 ${selected - painted.length} 句因页面变化未定位，请重新分析。` : ''}`;
     } catch (error) {
       if (generation === state.generation) state.status = `${error.message}${state.completed ? ` 已保留 ${state.completed} 句的分析结果。` : ''}`;
     } finally { if (generation === state.generation) { state.running = false; update(); } }

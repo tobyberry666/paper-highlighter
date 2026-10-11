@@ -28,11 +28,18 @@ async function classify(message, sender) {
         new Set(sentences.map(s => s?.id)).size !== sentences.length ||
         sentences.some(s => !s || typeof s.id !== 'string' || typeof s.text !== 'string' || !s.text.trim()) ||
         JSON.stringify(message).length > 45000) throw new Error('待分析数据不合法或过长。');
+    const translations = message.translations || [];
+    if (!Array.isArray(translations) || translations.length > 40 ||
+        new Set(translations.map(t => t?.id)).size !== translations.length ||
+        translations.some(t => !t || typeof t.id !== 'string' || typeof t.text !== 'string' || !t.text.trim() ||
+          !Array.isArray(t.sourceIds) || !t.sourceIds.length || t.sourceIds.some(id => !sentences.some(s => s.id === id)))) {
+      throw new Error('译文对应数据不合法。');
+    }
     const response = await fetch(endpoint, {
       method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${settings.apiKey.trim()}` },
       body: JSON.stringify({
-        model: settings.model.trim(), messages: PaperCore.buildMessages(message.context, sentences, message.neighbors),
-        response_format: { type: 'json_object' }, max_tokens: 4096, stream: true,
+        model: settings.model.trim(), messages: PaperCore.buildMessages(message.context, sentences, message.neighbors, translations),
+        response_format: { type: 'json_object' }, max_tokens: translations.length ? 8192 : 4096, stream: true,
         ...(new URL(endpoint).hostname === 'api.deepseek.com' ? { thinking: { type: 'disabled' } } : {})
       }), signal: controller.signal, redirect: 'error'
     });
@@ -40,7 +47,7 @@ async function classify(message, sender) {
       const explanations = { 401: '密钥无效或已过期', 402: '接口账户余额不足', 403: '接口拒绝访问', 429: '接口限流，请稍后重试' };
       throw new Error(`接口返回 ${response.status}：${explanations[response.status] || '请检查接口地址、模型名及服务兼容性'}。`);
     }
-    return PaperCore.parseAnnotations(await PaperCore.completionText(response), sentences);
+    return PaperCore.parseAnnotations(await PaperCore.completionText(response), sentences, translations);
   } catch (error) {
     if (error.name === 'AbortError') throw new Error('请求已停止或超时。');
     if (error instanceof TypeError) throw new Error('无法连接模型接口，请检查地址和网络。');

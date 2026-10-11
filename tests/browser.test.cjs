@@ -36,7 +36,10 @@ test('loaded extension highlights exact text without modifying paper layout and 
     if (mode === 'slow') await new Promise(resolve => setTimeout(resolve, 2000));
     const annotations = input.sentences.map(s => {
       const vision = /imagine|想象/.test(s.text), background = /Scientific progress|科学进步/.test(s.text), limit = /do not|不训练/.test(s.text);
-      return { id: s.id, role: vision ? 'vision' : background ? 'background' : limit ? 'limitation' : 'mechanism', priority: vision || background ? 'background' : 'core', reason: limit ? '限制实际验证的能力范围。' : '解释改写代码与评估的机制。' };
+      const target = (input.translations || []).find(t => t.sourceIds.includes(s.id));
+      const quote = limit ? '然而，我们不训练基础模型。' : s.text.includes('We modify') ? '我们修改代码并用基准评估。' : '';
+      const matches = mode !== 'unaligned' && target && quote ? [{id:target.id,quote}] : [];
+      return { matches, id: s.id, role: vision ? 'vision' : background ? 'background' : limit ? 'limitation' : 'mechanism', priority: vision || background ? 'background' : 'core', reason: limit ? '限制实际验证的能力范围。' : '解释改写代码与评估的机制。' };
     });
     if (mode === 'bad') annotations.pop();
     res.setHeader('Content-Type', 'text/event-stream');
@@ -95,14 +98,31 @@ test('loaded extension highlights exact text without modifying paper layout and 
       const wrapper = document.createElement('span'); wrapper.className = 'immersive-translate-original-wrapper';
       while (p.firstChild) wrapper.append(p.firstChild); p.append(wrapper);
       const translated = document.createElement('font'); translated.className = 'immersive-translate-target-inner';
-      translated.textContent = '科学进步建立在已有发现上。我们修改代码并用基准评估。然而，我们不训练基础模型。'; p.append(translated);
+      translated.textContent = '科学进步建立在已有发现上。我们修改代码并用基准评估。然而，我们不训练基础模型。';
+      const targetWrapper=document.createElement('font'); targetWrapper.className='immersive-translate-target-wrapper'; targetWrapper.setAttribute('data-immersive-translate-translation-element-mark','1');
+      targetWrapper.append(translated); p.append(targetWrapper);
     });
     await paper.waitForFunction(() => [...CSS.highlights.get('paper-core')].some(r => r.toString().includes('We modify')));
     seen = []; await send('start');
     await paper.waitForFunction(() => document.querySelector('#paper-highlighter-ui').shadowRoot.querySelector('[data-status]').textContent.includes('完成'));
-    assert.ok(seen.some(s => s.language === 'zh' && s.text.includes('修改代码')));
+    assert.ok(!seen.some(s => s.language === 'zh'), 'Chinese must inherit English decisions rather than be independently classified');
     assert.ok(await paper.evaluate(() => [...CSS.highlights.get('paper-core')].some(r => r.toString().includes('修改代码'))));
     assert.ok(await paper.evaluate(() => ![...CSS.highlights.get('paper-core')].some(r => /Scientific progress|科学进步|imagine/.test(r.toString()))));
+    assert.equal(await paper.evaluate(() => [...CSS.highlights.get('paper-boundary')].filter(r => /do not|不训练/.test(r.toString())).length), 2);
+    const translatedRect = await paper.evaluate(() => { const r = [...CSS.highlights.get('paper-core')].find(r=>r.toString().includes('修改代码')); const b=r.getClientRects()[0]; return {x:b.x+5,y:b.y+b.height/2}; });
+    await paper.mouse.click(translatedRect.x,translatedRect.y);
+    assert.match(await paper.locator('#paper-highlighter-ui').locator('[data-detail]').innerText(), /解释改写代码与评估的机制/);
+    // Some vendor styles render a separate block directly after the source.
+    await paper.evaluate(() => {const p=document.querySelector('#mixed');p.after(p.querySelector('.immersive-translate-target-wrapper'));});
+    const translatedHTML=await paper.locator('article').innerHTML();
+    await send('start');
+    await paper.waitForFunction(() => document.querySelector('#paper-highlighter-ui').shadowRoot.querySelector('[data-status]').textContent.includes('完成'));
+    assert.equal(await paper.locator('article').innerHTML(),translatedHTML);
+    assert.equal(await paper.evaluate(() => [...CSS.highlights.get('paper-boundary')].filter(r=>r.toString().includes('不训练')).length),1);
+    mode='unaligned';await send('start');
+    await paper.waitForFunction(() => document.querySelector('#paper-highlighter-ui').shadowRoot.querySelector('[data-status]').textContent.includes('未可靠对应'));
+    assert.ok(await paper.evaluate(()=>[...CSS.highlights.get('paper-core')].some(r=>r.toString().includes('We modify'))));
+    assert.ok(await paper.evaluate(()=>![...CSS.highlights.get('paper-core')].some(r=>r.toString().includes('修改代码'))));
     mode = 'bad'; await send('start');
     await paper.waitForFunction(() => document.querySelector('#paper-highlighter-ui').shadowRoot.querySelector('[data-status]').textContent.includes('遗漏'));
     assert.equal(await paper.evaluate(() => CSS.highlights.get('paper-core').size), 0);

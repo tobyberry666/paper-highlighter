@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "论文重点 · Paper Highlights",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "使用 DeepSeek 或兼容接口识别 arXiv 论文的问题、机制、证据和限制，在原网页高亮并显示中文理由。",
   "minimum_chrome_version": "110",
   "permissions": ["storage", "activeTab"],
