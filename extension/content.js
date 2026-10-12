@@ -125,7 +125,8 @@
       const { context, sentences, targets } = readPaper();
       if (!sentences.length) throw new Error('未找到可分析的正文句子。');
       const batches = PaperCore.batchSentences(sentences, sentence => sentence.text.length + targets.filter(t => t.sourceIds.includes(sentence.id)).reduce((size, t) => size + 2 * t.text.length, 0));
-      let unmatched = 0;
+      const unmatched = new Set();
+      const alignmentHistory = [];
       state.total = sentences.length;
       for (const batch of batches) {
         if (generation !== state.generation) return;
@@ -137,16 +138,23 @@
         const response = await chrome.runtime.sendMessage({ type: 'classify', context, neighbors, translations: batchTargets, sentences: batch.map(({ id, text, section, language, formulas }) => ({ id, text, section, language, formulas })) });
         if (generation !== state.generation) return;
         if (!response?.ok) throw new Error(response?.error || '扩展后台没有响应，请刷新页面后重试。');
-        if (response.annotations.some(row => (row.matches || []).some(match => state.records.some(record =>
-          record.language === 'zh' && record.block.id === match.id && record.start < match.end && record.end > match.start)))) {
-          throw new Error('译文对应片段与已完成批次重叠，本批次未应用，请重新分析。');
-        }
+        const incoming = response.annotations.flatMap(row => row.alignmentSpans || row.matches || []);
+        const overlaps = (record, match) => record.block.id === match.id && record.start < match.end && record.end > match.start;
+        state.records = state.records.filter(record => {
+          if (record.language !== 'zh' || !incoming.some(match => overlaps(record, match))) return true;
+          unmatched.add(record.id); return false;
+        });
+        for (const row of response.annotations) row.matches = (row.matches || []).filter(match => {
+          if (!alignmentHistory.some(record => overlaps(record, match))) return true;
+          unmatched.add(row.id); return false;
+        });
+        for (const match of incoming) alignmentHistory.push({ block: { id: match.id }, start: match.start, end: match.end });
         const byId = new Map(batch.map(s => [s.id, s]));
         for (const row of response.annotations) {
           const source = byId.get(row.id);
           state.records.push({ ...source, ...row });
           if (row.priority !== 'core') continue;
-          if (batchTargets.some(t => t.sourceIds.includes(row.id)) && !row.matches?.length) unmatched++;
+          if (batchTargets.some(t => t.sourceIds.includes(row.id)) && (!row.matches?.length || row.alignmentIssues)) unmatched.add(row.id);
           for (const match of row.matches || []) {
             const target = targets.find(t => t.id === match.id);
             state.records.push({ ...row, text: match.quote, start: match.start, end: match.end, block: target, language: 'zh' });
@@ -155,7 +163,7 @@
         state.completed += batch.length; paint();
       }
       const selected = state.records.filter(r => r.priority === 'core').length;
-      state.status = `完成：分析 ${state.total} 句，显示 ${painted.length} 句重点。${unmatched ? ` ${unmatched} 句重点未可靠对应到译文。` : ''}${!targets.length ? ' 未检测到中文译文，请先使用沉浸式翻译。' : ''}${painted.length < selected ? ` 另有 ${selected - painted.length} 句因页面变化未定位，请重新分析。` : ''}`;
+      state.status = `完成：分析 ${state.total} 句，显示 ${painted.length} 句重点。${unmatched.size ? ` ${unmatched.size} 句重点的部分或全部译文未可靠对应，已保留英文重点。` : ''}${!targets.length ? ' 未检测到中文译文，请先使用沉浸式翻译。' : ''}${painted.length < selected ? ` 另有 ${selected - painted.length} 句因页面变化未定位，请重新分析。` : ''}`;
     } catch (error) {
       if (generation === state.generation) state.status = `${error.message}${state.completed ? ` 已保留 ${state.completed} 句的分析结果。` : ''}`;
     } finally { if (generation === state.generation) { state.running = false; update(); } }

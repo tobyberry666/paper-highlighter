@@ -37,8 +37,8 @@ test('loaded extension highlights exact text without modifying paper layout and 
     const annotations = input.sentences.map(s => {
       const vision = /imagine|想象/.test(s.text), background = /Scientific progress|科学进步/.test(s.text), limit = /do not|不训练/.test(s.text);
       const target = (input.translations || []).find(t => t.sourceIds.includes(s.id));
-      const quote = limit ? '然而，我们不训练基础模型。' : s.text.includes('We modify') ? '我们修改代码并用基准评估。' : '';
-      const matches = mode !== 'unaligned' && target && quote ? [{id:target.id,quote}] : [];
+      const quote = mode==='crossOverlap' && /cross-batch item (0|29|59)\./.test(s.text) ? '共同译文。' : limit ? '然而，我们不训练基础模型。' : s.text.includes('We modify') ? '我们修改代码并用基准评估。' : '';
+      const matches = mode !== 'unaligned' && target && quote ? [{id:target.id,quote: mode === 'misaligned' && !limit ? '这不是页面中的译文。' : quote}] : [];
       return { matches, id: s.id, role: vision ? 'vision' : background ? 'background' : limit ? 'limitation' : 'mechanism', priority: vision || background ? 'background' : 'core', reason: limit ? '限制实际验证的能力范围。' : '解释改写代码与评估的机制。' };
     });
     if (mode === 'bad') annotations.pop();
@@ -123,6 +123,18 @@ test('loaded extension highlights exact text without modifying paper layout and 
     await paper.waitForFunction(() => document.querySelector('#paper-highlighter-ui').shadowRoot.querySelector('[data-status]').textContent.includes('未可靠对应'));
     assert.ok(await paper.evaluate(()=>[...CSS.highlights.get('paper-core')].some(r=>r.toString().includes('We modify'))));
     assert.ok(await paper.evaluate(()=>![...CSS.highlights.get('paper-core')].some(r=>r.toString().includes('修改代码'))));
+    await paper.evaluate(()=>{for(let i=0;i<40;i++){const p=document.createElement('p');p.className='ltx_p';p.textContent=`We evaluate implementation number ${i}.`;document.querySelector('#S1').append(p);}});
+    mode='misaligned';seen=[];const beforeFailureCalls=calls;await send('start');
+    await paper.waitForFunction(() => document.querySelector('#paper-highlighter-ui').shadowRoot.querySelector('[data-status]').textContent.includes('完成'));
+    assert.ok(calls>beforeFailureCalls+1,'analysis must continue through later batches');
+    assert.ok(seen.some(s=>s.text.includes('number 39')),'last paragraph must still be analyzed');
+    assert.ok(await paper.evaluate(()=>[...CSS.highlights.get('paper-core')].some(r=>r.toString().includes('number 39'))));
+    assert.ok(await paper.evaluate(()=>[...CSS.highlights.get('paper-boundary')].some(r=>r.toString().includes('不训练'))),'valid Chinese match survives another invalid match');
+    await paper.evaluate(()=>{const p=document.createElement('p');p.className='ltx_p';p.textContent=Array.from({length:60},(_,i)=>`We evaluate cross-batch item ${i}.`).join(' ');const target=document.createElement('font');target.className='immersive-translate-target-inner';target.textContent='共同译文。';p.append(target);document.querySelector('#S1').append(p);});
+    mode='crossOverlap';await send('start');
+    await paper.waitForFunction(() => document.querySelector('#paper-highlighter-ui').shadowRoot.querySelector('[data-status]').textContent.includes('完成'));
+    assert.equal(await paper.evaluate(()=>[...CSS.highlights.get('paper-core')].filter(r=>r.toString()==='共同译文。').length),0,'conflicting spans across batches must both be removed');
+    assert.ok(await paper.evaluate(()=>[...CSS.highlights.get('paper-core')].some(r=>r.toString().includes('cross-batch item 29'))));
     mode = 'bad'; await send('start');
     await paper.waitForFunction(() => document.querySelector('#paper-highlighter-ui').shadowRoot.querySelector('[data-status]').textContent.includes('遗漏'));
     assert.equal(await paper.evaluate(() => CSS.highlights.get('paper-core').size), 0);

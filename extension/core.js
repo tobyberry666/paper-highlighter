@@ -41,28 +41,49 @@
     if (!Array.isArray(data?.annotations) || data.annotations.length !== expected.size) {
       throw new Error('模型遗漏了句子，本批次未应用，请重新分析。');
     }
-    const occupied = [];
-    return data.annotations.map(row => {
+    const rows = data.annotations.map(row => {
       if (!row || !expected.delete(row.id) || !Object.hasOwn(roles, row.role) ||
           !['core', 'support', 'background'].includes(row.priority) || typeof row.reason !== 'string' ||
           !row.reason.trim() || row.reason.length > 400) {
         throw new Error('模型返回的句子 ID、标签或理由不合法，本批次未应用。');
       }
       const targets = translations.filter(t => t.sourceIds.includes(row.id));
-      if ((targets.length && !Array.isArray(row.matches)) || (row.matches !== undefined && !Array.isArray(row.matches))) {
-        throw new Error('模型遗漏了译文对应关系，本批次未应用。');
-      }
-      const matches = (row.matches || []).map(match => {
+      const priority = ['background', 'vision'].includes(row.role) ? 'background' : row.priority;
+      let alignmentIssues = !Array.isArray(row.matches) && targets.length ? 1 : 0;
+      const matches = (priority === 'core' && Array.isArray(row.matches) ? row.matches : []).flatMap(match => {
         const target = targets.find(t => t.id === match?.id);
-        const start = target && typeof match.quote === 'string' && match.quote.trim() ? target.text.indexOf(match.quote) : -1;
-        if (start < 0 || target.text.indexOf(match.quote, start + 1) >= 0) throw new Error('模型返回的译文对应片段不合法或有歧义，本批次未应用。');
-        const end = start + match.quote.length;
-        if (occupied.some(span => span.id === target.id && span.start < end && span.end > start)) throw new Error('模型返回的译文对应范围重叠，本批次未应用。');
-        occupied.push({ id: target.id, start, end });
-        return { id: target.id, quote: match.quote, start, end };
+        const span = target && typeof match.quote === 'string' ? locateQuote(target.text, match.quote) : null;
+        if (!span) { alignmentIssues++; return []; }
+        return [{ id: target.id, quote: target.text.slice(span.start, span.end), ...span }];
       });
-      return { ...(translations.length ? { matches } : {}), id: row.id, role: row.role, priority: ['background', 'vision'].includes(row.role) ? 'background' : row.priority, reason: row.reason.trim() };
+      return { ...(translations.length || row.matches !== undefined ? { matches, alignmentSpans: [...matches], alignmentIssues } : {}), id: row.id, role: row.role, priority, reason: row.reason.trim() };
     });
+    // Discard both sides of a collision; choosing the first could show a wrong reason.
+    const spans = rows.flatMap(row => row.matches || []);
+    for (const row of rows) {
+      if (!row.matches) continue;
+      row.matches = row.matches.filter(span => {
+        const conflict = spans.some(other => other !== span && other.id === span.id && other.start < span.end && other.end > span.start);
+        if (conflict) row.alignmentIssues++;
+        return !conflict;
+      });
+    }
+    return rows;
+  }
+
+  function locateQuote(text, quote) {
+    if (!quote.trim()) return null;
+    const start = text.indexOf(quote);
+    if (start >= 0) return text.indexOf(quote, start + 1) < 0 ? { start, end: start + quote.length } : null;
+    const offsets = [], characters = [];
+    for (let i = 0; i < text.length; i++) {
+      if (/[\s\u200b\ufeff]/u.test(text[i])) continue;
+      characters.push(text[i]); offsets.push(i);
+    }
+    const normalized = characters.join(''), needle = quote.replace(/[\s\u200b\ufeff]/gu, '');
+    const position = needle ? normalized.indexOf(needle) : -1;
+    if (position < 0 || normalized.indexOf(needle, position + 1) >= 0) return null;
+    return { start: offsets[position], end: offsets[position + needle.length - 1] + 1 };
   }
 
   function apiUrl(baseUrl) {
