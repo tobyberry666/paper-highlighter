@@ -49,6 +49,19 @@
     return { text: parts.join(''), nodes, formulas: [...formulas.values()] };
   }
 
+  function translationCandidates(owner) {
+    const candidates = [...owner.querySelectorAll(translations)];
+    let following = owner.nextElementSibling;
+    while (following?.matches('br[data-imt="1"]')) following = following.nextElementSibling;
+    if (following?.matches(translations)) candidates.push(following);
+    let preceding = owner.previousElementSibling;
+    while (preceding?.matches('br[data-imt="1"]')) preceding = preceding.previousElementSibling;
+    let previousSource = preceding?.previousElementSibling;
+    while (previousSource?.matches('br[data-imt="1"]')) previousSource = previousSource.previousElementSibling;
+    if (preceding?.matches(translations) && !previousSource?.matches('p.ltx_p, .ltx_caption')) candidates.push(preceding);
+    return candidates.filter(element => !element.parentElement?.closest(translations));
+  }
+
   function readPaper() {
     const blocks = [], targets = [], seen = new Set();
     const article = document.querySelector('article.ltx_document, .ltx_document, article');
@@ -63,11 +76,7 @@
       if (data.text.trim()) blocks.push({ element, section, language: 'en', ...data });
       const source = blocks.at(-1);
       if (!source || source.element !== element) continue;
-      const candidates = [...element.querySelectorAll(translations)];
-      // Block translations can be inserted immediately after the original paragraph.
-      let sibling = element.nextElementSibling;
-      while (sibling?.matches('br[data-imt="1"]')) sibling = sibling.nextElementSibling;
-      if (sibling?.matches(translations)) candidates.push(sibling);
+      const candidates = translationCandidates(element);
       for (const target of candidates) {
         if (target.parentElement?.closest(translations) || targets.some(t => t.element === target)) continue;
         const translated = collectText(target, true);
@@ -97,7 +106,15 @@
     if (!CSS.highlights || typeof Highlight === 'undefined') return;
     const core = new Highlight(), boundary = new Highlight(); painted = [];
     for (const record of state.records) {
-      if (record.priority !== 'core' || !record.block.element.isConnected) continue;
+      if (record.priority !== 'core') continue;
+      if (!record.block.element.isConnected && record.language === 'zh' && record.block.source.element.isConnected) {
+        const owner = record.block.source.element;
+        const replacements = translationCandidates(owner).filter(element =>
+          !state.records.some(other => other.language === 'zh' && other.block.source !== record.block.source && other.block.element === element) &&
+          collectText(element, true).text === record.block.text);
+        if (replacements.length === 1) record.block.element = replacements[0];
+      }
+      if (!record.block.element.isConnected) continue;
       const block = collectText(record.block.element, record.language === 'zh');
       // Original offsets remain exact when only wrappers change, even for repeats.
       let start = record.start;
@@ -163,7 +180,9 @@
         state.completed += batch.length; paint();
       }
       const selected = state.records.filter(r => r.priority === 'core').length;
-      state.status = `完成：分析 ${state.total} 句，显示 ${painted.length} 句重点。${unmatched.size ? ` ${unmatched.size} 句重点的部分或全部译文未可靠对应，已保留英文重点。` : ''}${!targets.length ? ' 未检测到中文译文，请先使用沉浸式翻译。' : ''}${painted.length < selected ? ` 另有 ${selected - painted.length} 句因页面变化未定位，请重新分析。` : ''}`;
+      const english = painted.filter(item => item.record.language === 'en').length;
+      const chinese = painted.filter(item => item.record.language === 'zh').length;
+      state.status = `完成：分析 ${state.total} 句，英文重点 ${english} 处，中文重点 ${chinese} 处；识别 ${targets.length} 个中文译文块。${unmatched.size ? ` ${unmatched.size} 句重点的部分或全部译文未可靠对应，已保留英文重点。` : ''}${!targets.length ? ' 未检测到中文译文，请先使用沉浸式翻译。' : ''}${targets.length && !chinese ? ' 中文尚未成功标注，请核对译文对应结果。' : ''}${painted.length < selected ? ` 另有 ${selected - painted.length} 处因页面变化未定位，请重新分析。` : ''}`;
     } catch (error) {
       if (generation === state.generation) state.status = `${error.message}${state.completed ? ` 已保留 ${state.completed} 句的分析结果。` : ''}`;
     } finally { if (generation === state.generation) { state.running = false; update(); } }

@@ -8,7 +8,7 @@ test('translation spans inherit the source decision and locate exact visible quo
  const rows = core.parseAnnotations(JSON.stringify({annotations:[annotation]}), sentences, translations);
  assert.deepEqual(rows[0].matches,[{id:'t0',quote:'我们修改代码，然后评估。',start:5,end:17}]);
  const messages=core.buildMessages({},sentences,[],translations);
- assert.deepEqual(JSON.parse(messages[1].content).translations,translations);
+ assert.deepEqual(JSON.parse(messages[1].content).translations.map(({segments,...target})=>target),translations);
  assert.match(messages[0].content,/沿用英文/);
 });
 test('alignment rejects fabricated, ambiguous or unrelated Chinese matches', () => {
@@ -43,4 +43,16 @@ test('non-core translation suggestions cannot erase a valid core highlight',()=>
  const targets=[{...translations[0],sourceIds:['s0','s1']}];
  const rows=core.parseAnnotations(JSON.stringify({annotations:[annotation,{...annotation,id:'s1',priority:'background'}]}),sources,targets);
  assert.equal(rows[0].matches.length,1);assert.equal(rows[1].matches.length,0);
+});
+
+test('Chinese sentence IDs locate repeated text without asking the model to copy it',()=>{
+ const target={...translations[0],text:'我们修改代码。我们修改代码。'};
+ const options=core.translationSegments(target);
+ assert.equal(options.length,2);
+ const row={...annotation,matches:[{id:'t0',sentenceIds:[options[1].id]}]};
+ const result=core.parseAnnotations(JSON.stringify({annotations:[row]}),sentences,[target]);
+ assert.deepEqual(result[0].matches,[{id:'t0',quote:'我们修改代码。',start:7,end:14}]);
+ assert.equal(result[0].alignmentIssues,0);
+ const payload=JSON.parse(core.buildMessages({},sentences,[],[target])[1].content);
+ assert.equal(payload.translations[0].segments[1].id,options[1].id);
 });

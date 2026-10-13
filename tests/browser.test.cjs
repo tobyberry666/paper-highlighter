@@ -38,7 +38,8 @@ test('loaded extension highlights exact text without modifying paper layout and 
       const vision = /imagine|想象/.test(s.text), background = /Scientific progress|科学进步/.test(s.text), limit = /do not|不训练/.test(s.text);
       const target = (input.translations || []).find(t => t.sourceIds.includes(s.id));
       const quote = mode==='crossOverlap' && /cross-batch item (0|29|59)\./.test(s.text) ? '共同译文。' : limit ? '然而，我们不训练基础模型。' : s.text.includes('We modify') ? '我们修改代码并用基准评估。' : '';
-      const matches = mode !== 'unaligned' && target && quote ? [{id:target.id,quote: mode === 'misaligned' && !limit ? '这不是页面中的译文。' : quote}] : [];
+      let matches = mode !== 'unaligned' && target && quote ? [{id:target.id,quote: mode === 'misaligned' && !limit ? '这不是页面中的译文。' : quote}] : [];
+      if(mode==='ids' && target && quote) { const segment=target.segments?.find(part=>part.text===quote); matches=segment?[{id:target.id,sentenceIds:[segment.id]}]:[]; }
       return { matches, id: s.id, role: vision ? 'vision' : background ? 'background' : limit ? 'limitation' : 'mechanism', priority: vision || background ? 'background' : 'core', reason: limit ? '限制实际验证的能力范围。' : '解释改写代码与评估的机制。' };
     });
     if (mode === 'bad') annotations.pop();
@@ -119,6 +120,26 @@ test('loaded extension highlights exact text without modifying paper layout and 
     await paper.waitForFunction(() => document.querySelector('#paper-highlighter-ui').shadowRoot.querySelector('[data-status]').textContent.includes('完成'));
     assert.equal(await paper.locator('article').innerHTML(),translatedHTML);
     assert.equal(await paper.evaluate(() => [...CSS.highlights.get('paper-boundary')].filter(r=>r.toString().includes('不训练')).length),1);
+    mode='ids';await send('start');
+    await paper.waitForFunction(() => document.querySelector('#paper-highlighter-ui').shadowRoot.querySelector('[data-status]').textContent.includes('完成'));
+    assert.equal(await paper.evaluate(()=>[...CSS.highlights.get('paper-boundary')].filter(r=>r.toString().includes('不训练')).length),1,'Chinese IDs must produce a real range');
+    assert.match(await paper.locator('#paper-highlighter-ui').locator('[data-status]').innerText(),/英文.*中文/);
+    await paper.evaluate(()=>{const p=document.querySelector('#mixed');p.before(p.nextElementSibling);});
+    await send('start');
+    await paper.waitForFunction(() => document.querySelector('#paper-highlighter-ui').shadowRoot.querySelector('[data-status]').textContent.includes('完成'));
+    assert.equal(await paper.evaluate(()=>[...CSS.highlights.get('paper-boundary')].filter(r=>r.toString().includes('不训练')).length),1,'translation inserted BEFORE source must still pair');
+    await paper.evaluate(()=>{const target=document.querySelector('.immersive-translate-target-wrapper');target.replaceWith(target.cloneNode(true));});
+    await paper.waitForTimeout(400);
+    assert.equal(await paper.evaluate(()=>[...CSS.highlights.get('paper-boundary')].filter(r=>r.toString().includes('不训练')).length),1,'vendor replacing its translation nodes must not erase Chinese highlights');
+    const chineseStyle=await paper.locator('.immersive-translate-target-inner').evaluate(el=>getComputedStyle(el,'::highlight(paper-core)').backgroundColor);
+    assert.notEqual(chineseStyle,'rgba(0, 0, 0, 0)','Chinese highlighting must have a visible background style');
+    await paper.screenshot({path:path.resolve('docs/superpowers/plans/bilingual-preview.png')});
+    await paper.evaluate(()=>{const p=document.querySelector('#mixed');const target=p.previousElementSibling;const br=document.createElement('br');br.setAttribute('data-imt','1');p.after(br);br.after(target);});
+    await send('start');
+    await paper.waitForFunction(() => document.querySelector('#paper-highlighter-ui').shadowRoot.querySelector('[data-status]').textContent.includes('完成'));
+    await paper.evaluate(()=>{const target=document.querySelector('.immersive-translate-target-wrapper');target.replaceWith(target.cloneNode(true));});
+    await paper.waitForTimeout(400);
+    assert.equal(await paper.evaluate(()=>[...CSS.highlights.get('paper-boundary')].filter(r=>r.toString().includes('不训练')).length),1,'vendor br separators must not break reconnection');
     mode='unaligned';await send('start');
     await paper.waitForFunction(() => document.querySelector('#paper-highlighter-ui').shadowRoot.querySelector('[data-status]').textContent.includes('未可靠对应'));
     assert.ok(await paper.evaluate(()=>[...CSS.highlights.get('paper-core')].some(r=>r.toString().includes('We modify'))));
