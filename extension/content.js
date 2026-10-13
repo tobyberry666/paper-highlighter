@@ -1,7 +1,7 @@
 (() => {
   const translations = 'immersive-translate-target-wrapper, immersive-translate-target-inner, .immersive-translate-target-wrapper, .immersive-translate-target-inner, .immersive-translate-target-translation, [data-immersive-translate-translation-element], [data-immersive-translate-translation-element-mark]';
   const excluded = 'script, style, annotation, pre, code, .ltx_bibliography, .ltx_listing, .ltx_verbatim, .ltx_ERROR';
-  const state = { running: false, visible: true, status: '准备就绪', completed: 0, total: 0, records: [], generation: 0 };
+  const state = { running: false, expired: false, visible: true, status: '准备就绪', completed: 0, total: 0, records: [], generation: 0 };
   let painted = [], refreshTimer;
 
   const host = document.createElement('div');
@@ -21,9 +21,16 @@
 
   function update() {
     shadow.querySelector('[data-status]').textContent = state.status;
-    shadow.querySelector('[data-action=start]').disabled = state.running;
+    shadow.querySelector('[data-action=start]').disabled = state.running || state.expired;
     shadow.querySelector('[data-action=stop]').hidden = !state.running;
     shadow.querySelector('[data-action=toggle]').textContent = state.visible ? '隐藏标记' : '显示标记';
+  }
+
+  function expiredContext(error) {
+    if (!/Extension context invalidated/i.test(error?.message || '')) return false;
+    state.expired = true;
+    state.status = '扩展已更新或重新加载。请刷新论文网页，再用沉浸式翻译重新翻译，然后分析重点；接口设置无需修改。';
+    update(); return true;
   }
 
   function collectText(element, translation = false) {
@@ -132,7 +139,7 @@
   }
 
   async function start() {
-    if (state.running) return;
+    if (state.running || state.expired) return;
     if (!CSS.highlights || typeof Highlight === 'undefined') { state.status = '浏览器不支持文本高亮 API，请更新 Chrome / Edge。'; update(); return; }
     const generation = ++state.generation;
     state.running = true; state.records = []; state.visible = true; state.completed = 0;
@@ -184,14 +191,15 @@
       const chinese = painted.filter(item => item.record.language === 'zh').length;
       state.status = `完成：分析 ${state.total} 句，英文重点 ${english} 处，中文重点 ${chinese} 处；识别 ${targets.length} 个中文译文块。${unmatched.size ? ` ${unmatched.size} 句重点的部分或全部译文未可靠对应，已保留英文重点。` : ''}${!targets.length ? ' 未检测到中文译文，请先使用沉浸式翻译。' : ''}${targets.length && !chinese ? ' 中文尚未成功标注，请核对译文对应结果。' : ''}${painted.length < selected ? ` 另有 ${selected - painted.length} 处因页面变化未定位，请重新分析。` : ''}`;
     } catch (error) {
-      if (generation === state.generation) state.status = `${error.message}${state.completed ? ` 已保留 ${state.completed} 句的分析结果。` : ''}`;
+      if (generation === state.generation && !expiredContext(error)) state.status = `${error.message}${state.completed ? ` 已保留 ${state.completed} 句的分析结果。` : ''}`;
     } finally { if (generation === state.generation) { state.running = false; update(); } }
   }
 
   function stop() {
     if (!state.running) return;
     state.generation++; state.running = false; state.status = `已停止，保留 ${state.completed} 句的分析结果。`; update();
-    chrome.runtime.sendMessage({ type: 'abort' }).catch(() => {});
+    try { chrome.runtime.sendMessage({ type: 'abort' }).catch(expiredContext); }
+    catch (error) { expiredContext(error); }
   }
 
   function action(type) {

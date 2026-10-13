@@ -67,3 +67,5 @@ ZIP 安装包需要先解压，再选择其中的 extension 文件夹；不能�
 下载最新 ZIP 并解压，用其中的 extension 文件夹覆盖原先加载的文件夹；在浏览器扩展管理页点击本扩展的刷新按钮，再刷新论文网页。使用同一个已安装扩展更新可保留本地接口设置。
 
 官方参考：[DeepSeek JSON 输出](https://api-docs.deepseek.com/guides/json_mode/)、[DeepSeek Chat Completions](https://api-docs.deepseek.com/api/create-chat-completion/)。
+
+如果显示“扩展已更新或重新加载”或旧版的 `Extension context invalidated`，请刷新论文网页，再重新翻译和分析。扩展管理页刷新插件后，已打开的论文页也必须刷新；无需修改密钥。

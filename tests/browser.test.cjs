@@ -168,6 +168,16 @@ test('loaded extension highlights exact text without modifying paper layout and 
     assert.ok(calls <= prior + 1);
     await send('clear');
     assert.equal(await paper.evaluate(() => CSS.highlights.get('paper-core').size), 0);
+    await worker.evaluate(()=>chrome.runtime.reload()).catch(()=>{});
+    await paper.waitForTimeout(700);
+    await paper.locator('#paper-highlighter-ui').locator('[data-action=start]').click();
+    await paper.waitForFunction(()=>document.querySelector('#paper-highlighter-ui').shadowRoot.querySelector('[data-status]').textContent.includes('扩展已更新或重新加载'));
+    assert.equal(await paper.locator('#paper-highlighter-ui').locator('[data-action=start]').isDisabled(),true);
+    assert.match(await paper.locator('#paper-highlighter-ui').locator('[data-status]').innerText(),/刷新论文网页.*重新翻译/);
+    mode='success';await paper.reload();await paper.waitForSelector('#paper-highlighter-ui',{state:'attached'});
+    await paper.locator('#paper-highlighter-ui').locator('[data-action=start]').click();
+    await paper.waitForFunction(()=>document.querySelector('#paper-highlighter-ui').shadowRoot.querySelector('[data-status]').textContent.includes('完成'));
+    assert.ok(await paper.evaluate(()=>CSS.highlights.get('paper-core').size>0),'refresh reconnects extension and retains API settings');
     console.log('Browser integration: source + translation + unchanged layout + rationale + malformed results + cancellation verified.');
   } finally {
     if (context) await context.close();
