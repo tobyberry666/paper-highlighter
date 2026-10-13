@@ -12,7 +12,7 @@ const fixture = `<!doctype html><html><head><style>article{width:720px;margin:40
 <section class="ltx_section" id="S1"><h2 class="ltx_title">Introduction</h2>
 <p class="ltx_p" id="mixed">Scientific progress builds on past insights. We modify code and evaluate it using <a href="#ref">benchmarks</a>. However, we do not train foundation models.</p>
 <p class="ltx_p" id="math">We select agents using <math alttext="x^2"><msup><mi>x</mi><mn>2</mn></msup></math> and <math><mfrac><mn>1</mn><mn>2</mn></mfrac></math>. One can imagine endless innovation.</p>
-<p class="ltx_p" id="repeat">We evaluate code. We evaluate code.</p>
+<p class="ltx_p" id="repeat">We evaluate code. We evaluate code.</p><p class="ltx_p" style="margin-top:1200px">Remote search target.</p>
 </section><section class="ltx_bibliography"><p class="ltx_p" id="ref">Reference. Author 2017.</p></section></article></body></html>`;
 
 test('loaded extension highlights exact text without modifying paper layout and supports translations, errors and cancellation', { timeout: 120000 }, async () => {
@@ -74,6 +74,25 @@ test('loaded extension highlights exact text without modifying paper layout and 
       const tab = tabs.find(t => t.url === paperUrl);
       return chrome.tabs.sendMessage(tab.id, { type });
     }, { type, paperUrl: paper.url() });
+    const finder=paper.locator('#paper-highlighter-ui').locator('[data-find]');
+    assert.equal(await finder.isVisible(),false,'search panel is initially hidden');
+    await paper.bringToFront();await paper.keyboard.press('Control+f');
+    await finder.waitFor({state:'visible',timeout:1000});
+    const query=finder.getByRole('searchbox',{name:'搜索文本'});
+    await query.fill('WE EVALUATE CODE.');
+    assert.equal(await paper.evaluate(()=>CSS.highlights.get('paper-find').size),2);
+    assert.match(await finder.locator('[data-find-count]').innerText(),/1.*2/);
+    await query.press('Enter');assert.match(await finder.locator('[data-find-count]').innerText(),/2.*2/);
+    await query.press('Shift+Enter');assert.match(await finder.locator('[data-find-count]').innerText(),/1.*2/);
+    await finder.getByRole('button',{name:'下一处',exact:true}).click();assert.match(await finder.locator('[data-find-count]').innerText(),/2.*2/);
+    await finder.getByRole('button',{name:'上一处',exact:true}).click();assert.match(await finder.locator('[data-find-count]').innerText(),/1.*2/);
+    await query.fill('Remote search target');
+    assert.ok(await paper.evaluate(()=>{const rect=[...CSS.highlights.get('paper-find-current')][0].getBoundingClientRect();return rect.top>=0 && rect.bottom<=innerHeight;}),'active match scrolls into view');
+    await query.fill('[');assert.match(await finder.locator('[data-find-count]').innerText(),/未找到/);
+    await query.fill('using benchmarks');assert.equal(await paper.evaluate(()=>CSS.highlights.get('paper-find').size),2,'search crosses inline citation nodes');
+    assert.equal(calls,0,'search must not call API');
+    await query.press('Escape');assert.equal(await finder.isVisible(),false);
+    assert.equal(await paper.evaluate(()=>CSS.highlights.has('paper-find')),false);
     await send('start');
     await paper.waitForFunction(() => document.querySelector('#paper-highlighter-ui').shadowRoot.querySelector('[data-status]').textContent.includes('完成'));
     assert.ok(calls > 0);
@@ -93,6 +112,8 @@ test('loaded extension highlights exact text without modifying paper layout and 
     await send('toggle');
     assert.equal(await paper.evaluate(() => CSS.highlights.has('paper-core')), false);
     await send('toggle');
+    await paper.keyboard.press('Control+f');await query.fill('修改代码');
+    assert.match(await finder.locator('[data-find-count]').innerText(),/未找到/);
     // Simulate translation wrapping and inserting nodes after the initial analysis.
     await paper.evaluate(() => {
       const p = document.querySelector('#mixed');
@@ -104,6 +125,12 @@ test('loaded extension highlights exact text without modifying paper layout and 
       targetWrapper.append(translated); p.append(targetWrapper);
     });
     await paper.waitForFunction(() => [...CSS.highlights.get('paper-core')].some(r => r.toString().includes('We modify')));
+    await paper.waitForFunction(()=>CSS.highlights.get('paper-find')?.size===1);
+    await paper.screenshot({path:path.resolve('docs/superpowers/plans/search-preview.png')});
+    await paper.keyboard.press('Control+f');await query.fill('修改代码');
+    assert.equal(await paper.evaluate(()=>CSS.highlights.get('paper-find').size),1,'existing Chinese translation is searchable');
+    await query.fill('benchmarks');assert.equal(await paper.evaluate(()=>CSS.highlights.get('paper-find').size),2);
+    await query.press('Escape');assert.ok(await paper.evaluate(()=>CSS.highlights.get('paper-core').size>0),'search closing preserves important highlights');
     seen = []; await send('start');
     await paper.waitForFunction(() => document.querySelector('#paper-highlighter-ui').shadowRoot.querySelector('[data-status]').textContent.includes('完成'));
     assert.ok(!seen.some(s => s.language === 'zh'), 'Chinese must inherit English decisions rather than be independently classified');

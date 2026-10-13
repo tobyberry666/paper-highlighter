@@ -12,11 +12,14 @@
     section{box-sizing:border-box;width:310px;background:#fff;border:1px solid #dbe2ed;border-radius:12px;box-shadow:0 8px 30px #172d491f;padding:14px}
     strong{font-size:14px}p{margin:8px 0;overflow-wrap:anywhere}small{color:#637185}button{font:inherit;cursor:pointer;border:1px solid #ccd6e4;background:#f5f8fc;color:#24364e;padding:4px 9px;border-radius:6px;margin:3px 5px 0 0}button:hover{background:#eaf0f7}
     [data-detail]{border-top:1px solid #e4e9f0;margin-top:10px;padding-top:8px;max-height:240px;overflow:auto;white-space:pre-wrap} [hidden]{display:none}
+    [data-find]{position:fixed;right:20px;top:20px;background:#fff;border:1px solid #dbe2ed;border-radius:10px;box-shadow:0 8px 30px #172d491f;padding:12px;width:310px;box-sizing:border-box}
+    [data-find] input{box-sizing:border-box;width:100%;font:inherit;padding:7px;border:1px solid #ccd6e4;border-radius:6px}
     @media(max-width:600px){:host{right:10px;bottom:10px}section{width:270px}}
   </style><section aria-label="论文重点标记"><strong>论文重点</strong><p data-status aria-live="polite">准备就绪</p>
     <small>黄色：重点 · 紫色：假设与限制<br>点击高亮查看理由；自动判断需核对。</small><div>
     <button data-action="start">分析重点</button><button data-action="stop" hidden>停止</button><button data-action="toggle">隐藏标记</button><button data-action="clear">清除</button>
-    <button data-action="minimize" aria-label="收起面板">收起</button></div><p data-detail hidden></p></section><button data-action="expand" hidden>论文重点</button>`;
+    <button data-action="minimize" aria-label="收起面板">收起</button></div><p data-detail hidden></p></section><button data-action="expand" hidden>论文重点</button>
+    <div data-find role="dialog" aria-label="论文文本搜索" hidden><input type="search" aria-label="搜索文本" placeholder="搜索英文或已有中文译文" autocomplete="off"><p data-find-count aria-live="polite">输入搜索文本</p><button data-find-action="previous" aria-label="上一处">↑</button><button data-find-action="next" aria-label="下一处">↓</button><button data-find-action="close">关闭</button><p><small>Enter 下一处 · Shift+Enter 上一处 · Esc 关闭</small></p></div>`;
   document.documentElement.append(host);
 
   function update() {
@@ -33,13 +36,13 @@
     update(); return true;
   }
 
-  function collectText(element, translation = false) {
+  function collectText(element, translation = false, search = false) {
     const nodes = [], parts = [], formulas = new Map();
     let size = 0;
     const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT, {
       acceptNode(node) {
         const parent = node.parentElement;
-        if (!parent || parent.closest(excluded) || (!translation && (parent.closest(translations) || parent.closest('[data-imt="1"]')))) return NodeFilter.FILTER_REJECT;
+        if (!parent || parent.closest(search ? 'script, style, annotation, pre, code, .ltx_ERROR' : excluded) || (!translation && (parent.closest(translations) || parent.closest('[data-imt="1"]')))) return NodeFilter.FILTER_REJECT;
         if (parent.closest('[hidden], [aria-hidden=true]')) return NodeFilter.FILTER_REJECT;
         return NodeFilter.FILTER_ACCEPT;
       }
@@ -108,6 +111,69 @@
     range.setStart(first.node, start - first.start); range.setEnd(last.node, end - last.start);
     return range;
   }
+
+  const finder = shadow.querySelector('[data-find]');
+  const query = finder.querySelector('input');
+  let searchRanges = [], searchIndex = -1, previousFocus;
+
+  function showSearchMatch(step = 0, scroll = true) {
+    if (searchRanges.length) searchIndex = (searchIndex + step + searchRanges.length) % searchRanges.length;
+    finder.querySelector('[data-find-count]').textContent = !query.value.trim() ? '输入搜索文本' : searchRanges.length ? `${searchIndex + 1} / ${searchRanges.length}` : '未找到匹配文本';
+    for (const button of finder.querySelectorAll('[data-find-action=previous], [data-find-action=next]')) button.disabled = !searchRanges.length;
+    if (!CSS.highlights || typeof Highlight === 'undefined') return;
+    CSS.highlights.set('paper-find', new Highlight(...searchRanges));
+    const active = searchRanges[searchIndex];
+    CSS.highlights.set('paper-find-current', new Highlight(...(active ? [active] : [])));
+    if (scroll && active) {
+      const rect = active.getBoundingClientRect();
+      window.scrollBy({ top: rect.top - window.innerHeight / 2, left: rect.left < 0 ? rect.left : rect.right > window.innerWidth ? rect.right - window.innerWidth : 0, behavior: 'instant' });
+    }
+  }
+
+  function searchText(scroll = true) {
+    searchRanges = []; searchIndex = 0;
+    const article = document.querySelector('article.ltx_document, .ltx_document, article');
+    const value = query.value.trim();
+    if (article && value) {
+      const pattern = new RegExp(value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'giu');
+      const selector = 'p, .ltx_caption, .ltx_title, td, th, li';
+      const sources = [...article.querySelectorAll(selector)].filter(element => !element.closest(translations) && ![...element.querySelectorAll(selector)].some(child => !child.closest(translations)));
+      const targets = [...article.querySelectorAll(translations)].filter(element => !element.parentElement?.closest(translations));
+      for (const element of [...sources, ...targets]) {
+        const block = collectText(element, element.matches(translations), true);
+        for (const match of block.text.matchAll(pattern)) {
+          const range = textRange(block, match.index, match.index + match[0].length);
+          if (range?.getClientRects().length) searchRanges.push(range);
+        }
+      }
+      searchRanges.sort((a, b) => a.compareBoundaryPoints(Range.START_TO_START, b));
+    }
+    showSearchMatch(0, scroll);
+  }
+
+  function closeSearch() {
+    finder.hidden = true; searchRanges = []; searchIndex = -1;
+    CSS.highlights?.delete('paper-find'); CSS.highlights?.delete('paper-find-current');
+    if (previousFocus?.isConnected) previousFocus.focus({ preventScroll: true });
+  }
+
+  query.addEventListener('input', () => searchText());
+  finder.addEventListener('click', event => {
+    const type = event.target.closest('[data-find-action]')?.dataset.findAction;
+    if (type === 'close') closeSearch();
+    if (type === 'next' || type === 'previous') showSearchMatch(type === 'next' ? 1 : -1);
+  });
+  document.addEventListener('keydown', event => {
+    if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === 'f') {
+      event.preventDefault(); event.stopPropagation();
+      if (finder.hidden) previousFocus = document.activeElement;
+      finder.hidden = false; query.focus(); query.select(); searchText(false);
+    } else if (!finder.hidden && event.key === 'Escape') {
+      event.preventDefault(); event.stopPropagation(); closeSearch();
+    } else if (!finder.hidden && event.composedPath().includes(finder) && event.key === 'Enter' && !event.isComposing) {
+      event.preventDefault(); showSearchMatch(event.shiftKey ? -1 : 1);
+    }
+  }, true);
 
   function paint() {
     if (!CSS.highlights || typeof Highlight === 'undefined') return;
@@ -227,8 +293,8 @@
     if (['status', 'start', 'stop', 'toggle', 'clear'].includes(message.type)) reply({ running: state.running, visible: state.visible, status: state.status });
   });
   const observer = new MutationObserver(mutations => {
-    if (!state.records.length || mutations.every(m => host.contains(m.target))) return;
-    clearTimeout(refreshTimer); refreshTimer = setTimeout(paint, 250);
+    if ((!state.records.length && finder.hidden) || mutations.every(m => host.contains(m.target))) return;
+    clearTimeout(refreshTimer); refreshTimer = setTimeout(() => { paint(); if (!finder.hidden) searchText(false); }, 250);
   });
   observer.observe(document.querySelector('.ltx_document') || document.body, { subtree: true, childList: true, characterData: true });
 })();

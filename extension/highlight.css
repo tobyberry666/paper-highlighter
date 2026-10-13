@@ -1,5 +1,7 @@
 ::highlight(paper-core) { background-color: #ffdf798f; }
 ::highlight(paper-boundary) { background-color: #d8c2ff9c; }
+::highlight(paper-find) { background-color: #a8e8f2; color: #102a30; }
+::highlight(paper-find-current) { background-color: #ff9e45; color: #2a1700; }
 @media (prefers-color-scheme: dark) {
   ::highlight(paper-core) { background-color: #b28a2a80; }
   ::highlight(paper-boundary) { background-color: #8c66c280; }
